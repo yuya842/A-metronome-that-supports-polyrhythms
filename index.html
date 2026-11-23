@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>マルチ・同時メトロノーム</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #f5f5f7;
+            color: #333;
+        }
+        h1 { text-align: center; color: #1d1d1f; }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            margin-bottom: 20px;
+        }
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        input[type="number"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 16px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            background-color: #0071e3;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover { background-color: #0077ed; }
+        button.stop { background-color: #ff453a; }
+        button.stop:hover { background-color: #ff554b; }
+        .bpm-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 12px;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 8px;
+        }
+        .bpm-item span { font-weight: bold; min-width: 60px; }
+        .indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background-color: #ddd;
+            transition: background-color 0.05s ease;
+        }
+        .indicator.flash { background-color: #34c759; }
+        .controls { text-align: center; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+    <h1>マルチ・同時メトロノーム</h1>
+
+    <div class="card">
+        <label for="count" style="display:block; margin-bottom:8px; font-weight:bold;">1. 同時に鳴らすBPMの個数を入力：</label>
+        <div class="input-group">
+            <input type="number" id="count" min="1" max="10" value="3">
+            <button onclick="generateInputs()">設定枠を作る</button>
+        </div>
+    </div>
+
+    <div class="card" id="bpm-container" style="display:none;">
+        <label style="display:block; margin-bottom:12px; font-weight:bold;">2. それぞれのBPMを入力：</label>
+        <div id="bpm-inputs-list"></div>
+        
+        <div class="controls">
+            <button id="startBtn" onclick="toggleMetronome()">同時スタート</button>
+        </div>
+    </div>
+
+    <script>
+        let audioCtx = null;
+        let isPlaying = false;
+        let timers = [];
+
+        function generateInputs() {
+            const count = parseInt(document.getElementById('count').value);
+            const listContainer = document.getElementById('bpm-inputs-list');
+            listContainer.innerHTML = '';
+            
+            if (isPlaying) toggleMetronome();
+
+            let baseBpm = 120;
+
+            for (let i = 0; i < count; i++) {
+                const div = document.createElement('div');
+                div.className = 'bpm-item';
+                div.innerHTML = `
+                    <span>音 ${i + 1}:</span>
+                    <input type="number" class="bpm-value" min="20" max="300" value="${baseBpm + (i * 10)}">
+                    <div class="indicator" id="indicator-${i}"></div>
+                `;
+                listContainer.appendChild(div);
+            }
+            document.getElementById('bpm-container').style.display = 'block';
+        }
+
+        // 🔊 音抜けを徹底強化した「カン！カン！」という高音
+        function playClick(index) {
+            if (!audioCtx) return;
+            
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            // 最も音がハッキリ通る「矩形波（スクエア波）」を採用
+            osc.type = 'square'; 
+            
+            // 人の耳に最も届きやすい高めの周波数（800Hz〜）に設定
+            // 音ごとに高さを変えて、混ざっても聞き分けられるようにしています
+            osc.frequency.setValueAtTime(800 + (index * 250), audioCtx.currentTime);
+            
+            // 音量全開
+            gain.gain.setValueAtTime(1.0, audioCtx.currentTime);
+            
+            // アタック感を出すため、0.04秒で鋭く「カチッ」と切る
+            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.04);
+            
+            osc.start(audioCtx.currentTime);
+            osc.stop(audioCtx.currentTime + 0.04);
+
+            const indicator = document.getElementById(`indicator-${index}`);
+            if (indicator) {
+                indicator.classList.add('flash');
+                setTimeout(() => indicator.classList.remove('flash'), 50);
+            }
+        }
+
+        function toggleMetronome() {
+            const startBtn = document.getElementById('startBtn');
+
+            if (isPlaying) {
+                timers.forEach(t => clearInterval(t));
+                timers = [];
+                isPlaying = false;
+                startBtn.innerText = "同時スタート";
+                startBtn.className = "";
+            } else {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                
+                const bpmInputs = document.querySelectorAll('.bpm-value');
+                timers = [];
+
+                bpmInputs.forEach((input, index) => {
+                    const bpm = parseFloat(input.value);
+                    if (bpm > 0) {
+                        const intervalMs = (60 / bpm) * 1000;
+                        
+                        playClick(index);
+                        
+                        const timerId = setInterval(() => {
+                            playClick(index);
+                        }, intervalMs);
+                        timers.push(timerId);
+                    }
+                });
+
+                isPlaying = true;
+                startBtn.innerText = "同時ストップ";
+                startBtn.className = "stop";
+            }
+        }
+
+        generateInputs();
+    </script>
+</body>
+</html>
